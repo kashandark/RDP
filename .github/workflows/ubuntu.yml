@@ -21,7 +21,7 @@ jobs:
           # Allow SSH from firewall (ufw)
           sudo ufw allow 22/tcp || true
 
-          # Harden SSH: disable root login and enable password authentication
+          # Harden SSH: disable root login and password auth (if needed)
           sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
           sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
@@ -46,11 +46,11 @@ jobs:
 
       - name: Establish Tailscale Connection
         env:
-          TAILSCALE_AUTH_KEY_UBUNTU: ${{ secrets.TAILSCALE_AUTH_KEY_UBUNTU }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY_UBUNTU} --hostname=gh-ubuntu-${GITHUB_RUN_ID}
+          sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=gh-ubuntu-${GITHUB_RUN_ID}
 
-          # Wait until Tailscale IP is assigned
+          # Wait until we get an IP
           for i in {1..10}; do
             TS_IP=$(tailscale ip -4 | head -n1)
             if [ -n "$TS_IP" ]; then
@@ -80,7 +80,7 @@ jobs:
           echo "Password: $SSH_PASSWORD"
           echo "=================="
           echo ""
-          echo "Keeping workflow alive for SSH session..."
+          echo "Keep this workflow running for SSH session..."
           while true; do
             echo "[$(date)] SSH Active - Cancel workflow to terminate"
             sleep 300
