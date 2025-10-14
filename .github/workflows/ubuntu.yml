@@ -1,87 +1,77 @@
-name: SSH (Ubuntu)
+name: Cockpit-Access
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-ssh:
+  secure-cockpit:
     runs-on: ubuntu-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure System & SSH
+      - name: Update and Install Cockpit
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y openssh-server
+          sudo apt-get install -y cockpit
 
-          # Enable and configure SSH service
-          sudo systemctl enable ssh
-          sudo systemctl start ssh
+          # Enable and start Cockpit service
+          sudo systemctl enable --now cockpit.socket
 
-          # Allow SSH from firewall (ufw)
-          sudo ufw allow 22/tcp || true
+          # Allow Cockpit through firewall (if UFW is available)
+          if command -v ufw &>/dev/null; then
+            sudo ufw allow 9090/tcp || true
+          fi
 
-          # Harden SSH: disable root login and password auth (if needed)
-          sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-          sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo systemctl restart ssh
-
-      - name: Create SSH User with Secure Password
+      - name: Create Cockpit User with Secure Password
         run: |
-          # Generate secure random password
-          openssl rand -base64 16 > password.txt
-          PASS=$(cat password.txt)
+          # Generate a secure random password
+          PASSWORD=$(tr -dc A-Za-z0-9_@#%+ | head -c16)
+          sudo useradd -m -s /bin/bash cockpitadmin
+          echo "cockpitadmin:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo cockpitadmin
 
-          # Create new user
-          sudo useradd -m -s /bin/bash sshuser
-          echo "sshuser:$PASS" | sudo chpasswd
-          sudo usermod -aG sudo sshuser
-
-          echo "SSH_CREDS=User: sshuser | Password: $PASS" >> $GITHUB_ENV
-          echo "SSH_PASSWORD=$PASS" >> $GITHUB_ENV
+          echo "COCKPIT_CREDS=User: cockpitadmin | Password: $PASSWORD" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
+          sudo systemctl enable --now tailscaled
 
       - name: Establish Tailscale Connection
-        env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=gh-ubuntu-${GITHUB_RUN_ID}
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-cockpit-${{ github.run_id }}
 
-          # Wait until we get an IP
-          for i in {1..10}; do
-            TS_IP=$(tailscale ip -4 | head -n1)
-            if [ -n "$TS_IP" ]; then
-              echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-              break
-            fi
-            sleep 5
-          done
-
+          # Retrieve Tailscale IP
+          TS_IP=$(tailscale ip -4)
           if [ -z "$TS_IP" ]; then
             echo "Tailscale IP not assigned. Exiting."
             exit 1
           fi
 
-      - name: Verify SSH Accessibility
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Verify Cockpit Accessibility
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
-          nc -zv $TAILSCALE_IP 22 || (echo "SSH port not reachable" && exit 1)
-          echo "SSH connectivity successful!"
+          nc -zv $TAILSCALE_IP 9090
+          if [ $? -ne 0 ]; then
+            echo "Cockpit port (9090) not reachable"
+            exit 1
+          fi
+          echo "Cockpit is reachable on $TAILSCALE_IP:9090"
 
-      - name: Maintain Connection
+      - name: Maintain Session for Remote Access
         run: |
           echo ""
-          echo "=== SSH ACCESS ==="
-          echo "Address: $TAILSCALE_IP"
-          echo "Username: sshuser"
-          echo "Password: $SSH_PASSWORD"
-          echo "=================="
+          echo "=== COCKPIT ACCESS ==="
+          echo "URL: https://$TAILSCALE_IP:9090"
+          echo "Username: cockpitadmin"
+          echo "Password: $COCKPIT_CREDS"
+          echo "======================="
           echo ""
-          echo "Keep this workflow running for SSH session..."
+          
+          # Keep alive indefinitely for remote admin
           while true; do
-            echo "[$(date)] SSH Active - Cancel workflow to terminate"
+            echo "[$(date)] Cockpit active. Access via Tailscale IP above."
             sleep 300
           done
