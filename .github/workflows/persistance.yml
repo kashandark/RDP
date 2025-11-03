@@ -1,4 +1,4 @@
-name: RDP
+name: Create RDP User with Tailscale Access
 
 on:
   workflow_dispatch:
@@ -9,111 +9,62 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
-        run: |
-          # Enable Remote Desktop and disable NLA
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          # Firewall rule for RDP
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" | Out-Null
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 | Out-Null
-
-          Restart-Service -Name TermService -Force
-
       - name: Create RDP User with Secure Password
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-              Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          }
-
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          $username = "rdpuser"
+          $password = "P@ssw0rd123!"
+          Write-Host "Creating user $username"
+          net user $username $password /add
+          net localgroup administrators $username /add
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Write-Host "RDP User created and RDP enabled successfully."
 
       - name: Install Tailscale
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"
-          $path = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $path
-          Start-Process msiexec.exe -ArgumentList "/i `"$path`" /quiet /norestart" -Wait
-          Remove-Item $path -Force
+          Write-Host "Downloading and installing Tailscale..."
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $msi = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -Wait -ArgumentList "/i $msi /qn"
+          Write-Host "Tailscale installed."
 
-      - name: Connect to Tailscale with Tagged Device Key
+      - name: Connect to Tailscale with Device Key
         run: |
           $persistDir = "C:\TailscalePersist"
           New-Item -ItemType Directory -Force -Path $persistDir | Out-Null
           $stateFile = "$persistDir\state.json"
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
 
+          Write-Host "Bringing Tailscale up..."
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
             --authkey=${{ secrets.TAILSCALE_DEVICE_KEY }} `
             --hostname=$hostname `
             --accept-routes `
             --accept-dns=false `
-            --advertise-tags=tag:github-runner `
-            --state="$stateFile"
+            --state="$stateFile" `
+            --unattended `
+            --timeout=60s
 
-          # Wait for Tailscale IP
-          $tsIP = $null
-          for ($i=0; $i -lt 10; $i++) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              if ($tsIP) { break }
-              Start-Sleep -Seconds 5
-          }
+          Start-Sleep -Seconds 10
 
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           if (-not $tsIP) {
-              Write-Error "No Tailscale IP assigned. Check Tailscale state."
+              Write-Error "❌ No Tailscale IP assigned. Check your reusable device key validity."
               & "$env:ProgramFiles\Tailscale\tailscale.exe" status
               exit 1
           }
 
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "✅ Connected to Tailscale. IP: $tsIP"
 
       - name: Setup Persistent Startup Task
         run: |
-          $persistDir = "C:\TailscalePersist"
-          $stateFile = "$persistDir\state.json"
-          $scriptPath = "$persistDir\reconnect.ps1"
-
-          $persistScript = @"
-          # Auto reconnect Tailscale and enable RDP at startup
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Start-Sleep -Seconds 10
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --state="$stateFile" --accept-routes --accept-dns=false --advertise-tags=tag:github-runner
-          Restart-Service -Name TermService -Force
-          "@
-
-          Set-Content -Path $scriptPath -Value $persistScript -Force
-
-          $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$scriptPath`""
+          $action = New-ScheduledTaskAction -Execute "$env:ProgramFiles\Tailscale\tailscale.exe" -Argument "up --state C:\TailscalePersist\state.json --unattended"
           $trigger = New-ScheduledTaskTrigger -AtStartup
-          Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "TailscaleRDPReconnect" -Description "Auto reconnect Tailscale and enable RDP at startup" -User "SYSTEM" -RunLevel Highest -Force
+          Register-ScheduledTask -TaskName "TailscaleAutoConnect" -Action $action -Trigger $trigger -RunLevel Highest -Force
+          Write-Host "✅ Persistent startup task added for Tailscale."
 
       - name: Display Connection Details
         run: |
-          Write-Host "`n============================"
-          Write-Host "✅ Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "👤 Username: RDP"
-          Write-Host "🔑 Password: $env:RDP_PASSWORD"
-          Write-Host "============================`n"
-          while ($true) {
-            Write-Host "[$(Get-Date)] RDP session active..."
-            Start-Sleep -Seconds 300
-          }
+          Write-Host "=============================
