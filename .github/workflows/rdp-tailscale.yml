@@ -1,0 +1,77 @@
+name: Create RDP User with Tailscale Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Create RDP User with Secure Password
+        run: |
+          $username = "rdpuser"
+          $password = "P@ssw0rd123!"
+          Write-Host "Creating user $username"
+          net user $username $password /add
+          net localgroup administrators $username /add
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Write-Host "RDP User created and RDP enabled successfully."
+
+      - name: Install Tailscale
+        run: |
+          Write-Host "Downloading and installing Tailscale..."
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $msi = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -Wait -ArgumentList "/i $msi /qn"
+          Write-Host "Tailscale installed."
+
+      - name: Connect to Tailscale with Device Key
+        run: |
+          $persistDir = "C:\TailscalePersist"
+          New-Item -ItemType Directory -Force -Path $persistDir | Out-Null
+          $stateFile = "$persistDir\state.json"
+          $hostname = "gh-runner-$env:GITHUB_RUN_ID"
+
+          Write-Host "Bringing Tailscale up..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_DEVICE_KEY }} `
+            --hostname=$hostname `
+            --accept-routes `
+            --accept-dns=false `
+            --state="$stateFile" `
+            --unattended `
+            --timeout=60s
+
+          Start-Sleep -Seconds 10
+
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          if (-not $tsIP) {
+              Write-Error "❌ No Tailscale IP assigned. Check your reusable device key validity."
+              & "$env:ProgramFiles\Tailscale\tailscale.exe" status
+              exit 1
+          }
+
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "✅ Connected to Tailscale. IP: $tsIP"
+
+      - name: Setup Persistent Startup Task
+        run: |
+          $action = New-ScheduledTaskAction -Execute "$env:ProgramFiles\Tailscale\tailscale.exe" -Argument "up --state C:\TailscalePersist\state.json --unattended"
+          $trigger = New-ScheduledTaskTrigger -AtStartup
+          Register-ScheduledTask -TaskName "TailscaleAutoConnect" -Action $action -Trigger $trigger -RunLevel Highest -Force
+          Write-Host "✅ Persistent startup task added for Tailscale."
+
+      - name: Display Connection Details
+        run: |
+          Write-Host "=========================================="
+          Write-Host "RDP Username: rdpuser"
+          Write-Host "RDP Password: P@ssw0rd123!"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "=========================================="
+
+      - name: Complete job
+        run: echo "✅ Setup complete. You can now connect via RDP using the Tailscale IP."
