@@ -1,0 +1,78 @@
+name: RDP over Tailscale (Ubuntu)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp-tailscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Update System
+        run: |
+          sudo apt update -y
+          sudo apt upgrade -y
+
+      - name: Create RDP User
+        run: |
+          echo "Creating RDP user..."
+          sudo useradd -m rdpuser
+          echo "rdpuser:P@ssw0rd123!" | sudo chpasswd
+          sudo usermod -aG sudo rdpuser
+          echo "✅ User rdpuser created."
+
+      - name: Install Desktop Environment + xRDP
+        run: |
+          echo "Installing desktop environment and xrdp..."
+          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          sudo adduser xrdp ssl-cert
+          echo xfce4-session > ~/.xsession
+          sudo systemctl restart xrdp
+          echo "✅ xRDP enabled."
+
+      - name: Install Tailscale
+        run: |
+          echo "Installing Tailscale..."
+          curl -fsSL https://tailscale.com/install.sh | sh
+          echo "✅ Tailscale installed."
+
+      - name: Connect to Tailscale Network
+        run: |
+          echo "Connecting to Tailscale..."
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_DEVICE_KEY }} \
+            --hostname=gh-runner-${{ github.run_id }} \
+            --accept-routes \
+            --accept-dns=false \
+            --unattended
+
+          sleep 5
+          tsIP=$(tailscale ip -4)
+          if [ -z "$tsIP" ]; then
+            echo "⚠️ No Tailscale IP assigned. Checking status..."
+            sudo tailscale status
+            echo "❌ Invalid or expired Tailscale key."
+            exit 1
+          fi
+
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+          echo "✅ Connected to Tailscale: $tsIP"
+
+      - name: Display Connection Details
+        run: |
+          echo "========================================"
+          echo "✅ Ubuntu RDP Access Ready"
+          echo "User: rdpuser"
+          echo "Pass: P@ssw0rd123!"
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "========================================"
+
+      - name: Keep RDP Alive
+        run: |
+          echo "RDP session active. Do NOT close this workflow."
+          while true; do
+            sleep 300
+          done
