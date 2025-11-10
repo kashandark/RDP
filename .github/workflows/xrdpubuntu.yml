@@ -35,10 +35,9 @@ jobs:
 
       - name: Connect to Tailscale Network
         run: |
+          echo "Connecting to Tailscale..."
           HOSTNAME="gh-ubuntu-${{ github.run_id }}"
-          echo "Connecting to Tailscale as $HOSTNAME"
 
-          # ✅ correct tailscale flags for GitHub runners
           sudo tailscale up \
             --auth-key=${{ secrets.TAILSCALE_DEVICE_KEY }} \
             --hostname=$HOSTNAME \
@@ -49,15 +48,14 @@ jobs:
           sleep 5
 
           tsIP=$(tailscale ip -4)
-
           if [ -z "$tsIP" ]; then
-            echo "❌ No Tailscale IP. Checking status..."
+            echo "❌ No Tailscale IP assigned. Checking status..."
             sudo tailscale status
             exit 1
           fi
 
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
-          echo "✅ Connected to Tailscale with IP: $tsIP"
+          echo "✅ Connected to Tailscale: $tsIP"
 
       - name: Display Connection Details
         run: |
