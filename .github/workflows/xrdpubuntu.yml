@@ -16,50 +16,48 @@ jobs:
 
       - name: Create RDP User
         run: |
-          echo "Creating RDP user..."
           sudo useradd -m rdpuser
           echo "rdpuser:P@ssw0rd123!" | sudo chpasswd
           sudo usermod -aG sudo rdpuser
-          echo "✅ User rdpuser created."
 
       - name: Install Desktop Environment + xRDP
         run: |
-          echo "Installing desktop environment and xrdp..."
           sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
           sudo adduser xrdp ssl-cert
           echo xfce4-session > ~/.xsession
           sudo systemctl restart xrdp
-          echo "✅ xRDP enabled."
 
       - name: Install Tailscale
         run: |
-          echo "Installing Tailscale..."
           curl -fsSL https://tailscale.com/install.sh | sh
-          echo "✅ Tailscale installed."
 
       - name: Connect to Tailscale Network
         run: |
-          echo "Connecting to Tailscale..."
+          HOSTNAME="gh-ubuntu-${{ github.run_id }}"
+          echo "Connecting to Tailscale as $HOSTNAME"
+
+          # ✅ correct tailscale flags for GitHub runners
           sudo tailscale up \
-            --authkey=${{ secrets.TAILSCALE_DEVICE_KEY }} \
-            --hostname=gh-runner-${{ github.run_id }} \
+            --auth-key=${{ secrets.TAILSCALE_DEVICE_KEY }} \
+            --hostname=$HOSTNAME \
             --accept-routes \
             --accept-dns=false \
-            --unattended
+            --reset
 
           sleep 5
+
           tsIP=$(tailscale ip -4)
+
           if [ -z "$tsIP" ]; then
-            echo "⚠️ No Tailscale IP assigned. Checking status..."
+            echo "❌ No Tailscale IP. Checking status..."
             sudo tailscale status
-            echo "❌ Invalid or expired Tailscale key."
             exit 1
           fi
 
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
-          echo "✅ Connected to Tailscale: $tsIP"
+          echo "✅ Connected to Tailscale with IP: $tsIP"
 
       - name: Display Connection Details
         run: |
@@ -70,9 +68,9 @@ jobs:
           echo "Tailscale IP: $TAILSCALE_IP"
           echo "========================================"
 
-      - name: Keep RDP Alive
+      - name: Keep Alive
         run: |
-          echo "RDP session active. Do NOT close this workflow."
+          echo "RDP session active. Do NOT stop the workflow."
           while true; do
             sleep 300
           done
