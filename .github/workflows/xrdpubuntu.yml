@@ -1,43 +1,26 @@
-name: RDP over Tailscale (Ubuntu)
+name: Ubuntu Tailscale Connect
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-tailscale:
+  tailscale:
     runs-on: ubuntu-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Update System
-        run: |
-          sudo apt update -y
-          sudo apt upgrade -y
-
-      - name: Create RDP User
-        run: |
-          sudo useradd -m rdpuser
-          echo "rdpuser:P@ssw0rd123!" | sudo chpasswd
-          sudo usermod -aG sudo rdpuser
-
-      - name: Install Desktop Environment + xRDP
-        run: |
-          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11
-          sudo systemctl enable xrdp
-          sudo systemctl start xrdp
-          sudo adduser xrdp ssl-cert
-          echo xfce4-session > ~/.xsession
-          sudo systemctl restart xrdp
-
       - name: Install Tailscale
         run: |
+          echo "Installing Tailscale..."
           curl -fsSL https://tailscale.com/install.sh | sh
+          echo "✅ Installed."
 
-      - name: Connect to Tailscale Network
+      - name: Connect to Tailscale
         run: |
-          echo "Connecting to Tailscale..."
+          echo "Bringing Tailscale online..."
           HOSTNAME="gh-ubuntu-${{ github.run_id }}"
 
+          # ✅ valid flags for GitHub runner version
           sudo tailscale up \
             --auth-key=${{ secrets.TAILSCALE_DEVICE_KEY }} \
             --hostname=$HOSTNAME \
@@ -47,28 +30,27 @@ jobs:
 
           sleep 5
 
-          tsIP=$(tailscale ip -4)
-          if [ -z "$tsIP" ]; then
-            echo "❌ No Tailscale IP assigned. Checking status..."
+          TS_IP=$(tailscale ip -4)
+          if [ -z "$TS_IP" ]; then
+            echo "❌ No Tailscale IP. Checking status..."
             sudo tailscale status
             exit 1
           fi
 
-          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
-          echo "✅ Connected to Tailscale: $tsIP"
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "✅ Connected. Tailscale IP: $TS_IP"
 
-      - name: Display Connection Details
+      - name: Output Connection Info
         run: |
-          echo "========================================"
-          echo "✅ Ubuntu RDP Access Ready"
-          echo "User: rdpuser"
-          echo "Pass: P@ssw0rd123!"
-          echo "Tailscale IP: $TAILSCALE_IP"
-          echo "========================================"
+          echo "==============================="
+          echo "✅ Tailscale Connection Active"
+          echo "IP: $TAILSCALE_IP"
+          echo "Hostname: gh-ubuntu-${{ github.run_id }}"
+          echo "==============================="
 
-      - name: Keep Alive
+      - name: Keep Session Alive
         run: |
-          echo "RDP session active. Do NOT stop the workflow."
+          echo "Runner active. Keep workflow running."
           while true; do
             sleep 300
           done
