@@ -1,29 +1,39 @@
-name: Ubuntu Tailscale Connect
+name: Ubuntu Tailscale SSH
 
 on:
   workflow_dispatch:
 
 jobs:
-  tailscale:
+  tailscale-ssh:
     runs-on: ubuntu-latest
     timeout-minutes: 3600
 
     steps:
+      - name: Create SSH User
+        run: |
+          sudo useradd -m sshuser
+          echo "sshuser:P@ssw0rd123!" | sudo chpasswd
+          sudo usermod -aG sudo sshuser
+
+      - name: Enable SSH Server
+        run: |
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+
       - name: Install Tailscale
         run: |
-          echo "Installing Tailscale..."
           curl -fsSL https://tailscale.com/install.sh | sh
-          echo "✅ Installed."
 
-      - name: Connect to Tailscale
+      - name: Connect to Tailscale with SSH Enabled
         run: |
-          echo "Bringing Tailscale online..."
+          echo "Connecting to Tailscale..."
           HOSTNAME="gh-ubuntu-${{ github.run_id }}"
 
-          # ✅ valid flags for GitHub runner version
+          # ✅ Valid flags for GitHub Ubuntu runner
           sudo tailscale up \
             --auth-key=${{ secrets.TAILSCALE_DEVICE_KEY }} \
             --hostname=$HOSTNAME \
+            --ssh \
             --accept-routes \
             --accept-dns=false \
             --reset
@@ -31,26 +41,29 @@ jobs:
           sleep 5
 
           TS_IP=$(tailscale ip -4)
+
           if [ -z "$TS_IP" ]; then
-            echo "❌ No Tailscale IP. Checking status..."
+            echo "❌ No Tailscale IP assigned. Checking status..."
             sudo tailscale status
             exit 1
           fi
 
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-          echo "✅ Connected. Tailscale IP: $TS_IP"
+          echo "✅ Tailscale Connected: $TS_IP"
 
-      - name: Output Connection Info
+      - name: Display SSH Access Info
         run: |
-          echo "==============================="
-          echo "✅ Tailscale Connection Active"
-          echo "IP: $TAILSCALE_IP"
-          echo "Hostname: gh-ubuntu-${{ github.run_id }}"
-          echo "==============================="
+          echo "=========================================="
+          echo "✅ SSH Access Over Tailscale"
+          echo "User: sshuser"
+          echo "Pass: P@ssw0rd123!"
+          echo "SSH Command:"
+          echo "ssh sshuser@$TAILSCALE_IP"
+          echo "=========================================="
 
-      - name: Keep Session Alive
+      - name: Keep Alive
         run: |
-          echo "Runner active. Keep workflow running."
+          echo "SSH session active. Do NOT stop the workflow."
           while true; do
             sleep 300
           done
